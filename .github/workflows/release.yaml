@@ -77,21 +77,11 @@ jobs:
           GOOS: ${{ matrix.configs.target-os }}
           GOARCH: ${{ matrix.configs.arch }}
 
-      - name: Import GPG key
-        run: echo "$GPG_KEY" | gpg --batch --import
-        env:
-          GPG_KEY: ${{ secrets.GPG_KEY }}
-
       - name: Build ${{ matrix.build.binary }}
         run: |
           make build-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}-${{ needs.extract-version.outputs.VERSION }}
           tar -czvf ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz -C build/bin .
 
-      - name: Sign binary archive
-        run: gpg --batch --yes --pinentry-mode=loopback --passphrase "$GPG_KEY_PASSPHRASE" --detach-sign ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz
-        env:
-          GPG_KEY_PASSPHRASE: ${{ secrets.GPG_KEY_PASSPHRASE }}
-      
       # Upload archives and signatures
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -99,12 +89,6 @@ jobs:
           name: ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz
           path: |
             ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz
-      - name: Upload archive signature
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz.sig
-          path: |
-            ${{ matrix.build.binary }}-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.configs.target-os }}-${{ matrix.configs.arch }}.tar.gz.sig
 
   # Job to draft release
   draft-release:
@@ -172,25 +156,14 @@ jobs:
 
           ## Binaries
 
-          | System | Architecture | Binary | PGP Signature |
-          |:---:|:---:|:---:|:---|
-          | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | amd64 | [beacond-${{ env.VERSION }}-linux-amd64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-amd64.tar.gz) | [Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-amd64.tar.gz.sig) |
-          | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | arm64 | [beacond-${{ env.VERSION }}-linux-arm64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-arm64.tar.gz) | [Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-arm64.tar.gz.sig) |
-          | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | arm64 | [beacond-${{ env.VERSION }}-darwin-arm64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-darwin-arm64.tar.gz) | [Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-darwin-arm64.tar.gz.sig) |          
-          | **System** | **Option** | - | **Resource** |
-          | <img src="https://simpleicons.org/icons/docker.svg" style="width: 32px;"/> | Docker | | [${{ env.IMAGE_NAME }}](https://ghcr.io/berachain/beacon-kit) |
-          
-          ### Verifying signatures
-          Use gpg to verify the signature on these binary archives. This is important to make sure that the content you\'ve downloaded is legitimate. gpg can be installed with most package managers. For example:
-          - `brew install gpg` on mac
-          - `apt install gpg` on Ubuntu/Debian
-
-          Once gpg is installed, import our public key into its database and verify:
-          - [Download signing public key from here](https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/.github/workflows/berachain_release.asc).
-          - Run `gpg --import berachain_release.asc`
-          - Verify with `gpg --verify {signature}.sig {binary}.tar.gz`
-          - This message is expected: `WARNING: This key is not certified with a trusted signature!`
-          - To resolve the warning, trust the key by signing with your own keypair. `gpg --lsign-key <keyid>`
+          | System | Architecture | Binary |
+          |:---:|:---:|:---:|
+          | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | amd64 | [beacond-${{ env.VERSION }}-linux-amd64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-amd64.tar.gz) |
+          | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | arm64 | [beacond-${{ env.VERSION }}-linux-arm64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-linux-arm64.tar.gz) |
+          | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | arm64 | [beacond-${{ env.VERSION }}-darwin-arm64](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/beacond-${{ env.VERSION }}-darwin-arm64.tar.gz) |          
+          | **System** | **Option** | **Resource** |
+          |:---:|:---:|:---:|
+          | <img src="https://simpleicons.org/icons/docker.svg" style="width: 32px;"/> | Docker | [${{ env.IMAGE_NAME }}](https://ghcr.io/berachain/beacon-kit) |
 
           ENDBODY
           )
