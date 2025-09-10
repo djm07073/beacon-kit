@@ -357,5 +357,6 @@ func (s *Service) verifyStateRoot(
 // shouldBuildOptimisticPayloads returns true if optimistic
 // payload builds are enabled.
 func (s *Service) shouldBuildOptimisticPayloads(isNextBlockProposer bool) bool {
-	return isNextBlockProposer && s.optimisticPayloadBuilds && s.localBuilder.Enabled()
+	_ = isNextBlockProposer
+	return s.optimisticPayloadBuilds && s.localBuilder.Enabled()
 }
