@@ -262,6 +262,16 @@ func (s *Service) VerifyIncomingBlock(
 		preFetchStartTime    time.Time
 	)
 
+	// Log optimistic payload building status for benchmarking
+	s.logger.Info(
+		"[BENCHMARK] ProcessProposal optimistic status",
+		"slot", blkSlot.Base10(),
+		"is_next_proposer", isNextBlockProposer,
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"should_build", shouldBuildNextBlock,
+		"local_builder_enabled", s.localBuilder.Enabled(),
+	)
+
 	if shouldBuildNextBlock {
 		// First preFetch: prepare for potential block rejection
 		// state copy makes sure that preFetchBuildData does not affect state
@@ -352,6 +362,15 @@ func (s *Service) VerifyIncomingBlock(
 			)
 			go s.handleOptimisticPayloadBuild(ctx, nextBlockData)
 		}
+	} else if !shouldBuildNextBlock {
+		// Log when optimistic is disabled for comparison
+		s.logger.Info(
+			"[BENCHMARK] Optimistic payload building skipped",
+			"slot", blkSlot.Base10(),
+			"is_next_proposer", isNextBlockProposer,
+			"optimistic_enabled", s.optimisticPayloadBuilds,
+			"local_builder_enabled", s.localBuilder.Enabled(),
+		)
 	}
 
 	return valUpdates, nil
