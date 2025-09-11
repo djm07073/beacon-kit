@@ -228,7 +228,7 @@ func (s *Service) VerifyIncomingBlock(
 	// forceStartupSync, then we should shut down the node and fix the problem.
 	s.forceStartupSyncOnce.Do(func() { s.forceSyncUponProcess(ctx, state) })
 
-	s.logger.Debug(
+	s.logger.Info(
 		"Received incoming beacon block",
 		"state_root", beaconBlk.GetStateRoot(),
 		"slot", beaconBlk.GetSlot(),
@@ -259,20 +259,33 @@ func (s *Service) VerifyIncomingBlock(
 		nextBlockData        *builder.RequestPayloadData
 		errFetch             error
 		shouldBuildNextBlock = s.shouldBuildOptimisticPayloads(isNextBlockProposer)
+		preFetchStartTime    time.Time
 	)
 
 	if shouldBuildNextBlock {
+		// First preFetch: prepare for potential block rejection
 		// state copy makes sure that preFetchBuildData does not affect state
+		preFetchStartTime = time.Now()
 		copiedState := state.Copy(ctx)
 		nextBlockData, errFetch = s.preFetchBuildData(copiedState, blk.GetConsensusTime())
+		preFetchDuration := time.Since(preFetchStartTime)
+		
 		if errFetch != nil {
 			// We don't return with err if pre-fetch fails. Instead we log the issue
 			// and still move to process the current block. Next block can always be
 			// built right after current height is finalized.
 			s.logger.Warn(
 				"Failed pre fetching data for optimistic block building",
-				"case", "block rejectiong",
+				"case", "block rejection",
 				"err", errFetch,
+				"duration_ms", preFetchDuration.Milliseconds(),
+			)
+		} else {
+			s.logger.Info(
+				"[BENCHMARK] First preFetch completed (pre-verification)",
+				"slot", blkSlot.Base10(),
+				"duration_ms", preFetchDuration.Milliseconds(),
+				"is_next_proposer", isNextBlockProposer,
 			)
 		}
 	}
@@ -297,27 +310,48 @@ func (s *Service) VerifyIncomingBlock(
 		return nil, err
 	}
 
-	s.logger.Debug(
+	s.logger.Info(
 		"State root verification succeeded - accepting incoming beacon block",
 		"state_root", beaconBlk.GetStateRoot(),
 	)
 
 	if shouldBuildNextBlock {
-		// state copy makes sure that preFetchBuildDataForSuccess does not affect state
-		copiedState := state.Copy(ctx)
-		nextBlockData, errFetch = s.preFetchBuildData(copiedState, blk.GetConsensusTime())
-		if errFetch != nil {
-			// We don't mark the block as rejected if it is valid but pre-fetch fails.
-			// Instead we log the issue and move to process the current block.
-			// Next block can always be built right after current height is finalized.
-			s.logger.Warn(
-				"Failed pre fetching data for optimistic block building",
-				"case", "block success",
-				"err", errFetch,
+		if isNextBlockProposer {
+			// Second preFetch: only for next proposer, using post-verification state
+			secondPreFetchStart := time.Now()
+			copiedState := state.Copy(ctx)
+			nextBlockData, errFetch = s.preFetchBuildData(copiedState, blk.GetConsensusTime())
+			secondPreFetchDuration := time.Since(secondPreFetchStart)
+			
+			if errFetch != nil {
+				// We don't mark the block as rejected if it is valid but pre-fetch fails.
+				// Instead we log the issue and move to process the current block.
+				// Next block can always be built right after current height is finalized.
+				s.logger.Warn(
+					"Failed pre fetching data for optimistic block building",
+					"case", "block success",
+					"err", errFetch,
+					"duration_ms", secondPreFetchDuration.Milliseconds(),
+				)
+				return valUpdates, nil
+			} else {
+				s.logger.Info(
+					"[BENCHMARK] Second preFetch completed (post-verification, proposer only)",
+					"slot", blkSlot.Base10(),
+					"duration_ms", secondPreFetchDuration.Milliseconds(),
+					"state", "post-verification",
+				)
+			}
+			go s.handleOptimisticPayloadBuild(ctx, nextBlockData)
+		} else if nextBlockData != nil && errFetch == nil {
+			// Non-proposer: reuse first preFetch result (optimistic for rejection case)
+			s.logger.Info(
+				"[BENCHMARK] Non-proposer using first preFetch result",
+				"slot", blkSlot.Base10(),
+				"optimization", "skip-second-prefetch",
 			)
-			return valUpdates, nil
+			go s.handleOptimisticPayloadBuild(ctx, nextBlockData)
 		}
-		go s.handleOptimisticPayloadBuild(ctx, nextBlockData)
 	}
 
 	return valUpdates, nil
@@ -357,5 +391,6 @@ func (s *Service) verifyStateRoot(
 // shouldBuildOptimisticPayloads returns true if optimistic
 // payload builds are enabled.
 func (s *Service) shouldBuildOptimisticPayloads(isNextBlockProposer bool) bool {
-	return isNextBlockProposer && s.optimisticPayloadBuilds && s.localBuilder.Enabled()
+	_ = isNextBlockProposer
+	return s.optimisticPayloadBuilds && s.localBuilder.Enabled()
 }
