@@ -40,6 +40,7 @@ func (s *Service) FinalizeBlock(
 	ctx sdk.Context,
 	req *cmtabci.FinalizeBlockRequest,
 ) (transition.ValidatorUpdates, error) {
+	finalizeBlockStartTime := time.Now()
 	// STEP 1: Decode block and blobs.
 	signedBlk, blobs, err := s.ParseBeaconBlock(req)
 	if err != nil {
@@ -48,6 +49,15 @@ func (s *Service) FinalizeBlock(
 	}
 	blk := signedBlk.GetBeaconBlock()
 	st := s.storageBackend.StateFromContext(ctx)
+	
+	// Log FinalizeBlock start for complete flow timing
+	s.logger.Info(
+		"[BENCHMARK] FinalizeBlock START",
+		"slot", blk.GetSlot().Base10(),
+		"height", req.Height,
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"timestamp_ms", finalizeBlockStartTime.UnixMilli(),
+	)
 
 	// Send an FCU to force the HEAD of the chain on the EL on startup.
 	var finalizeErr error
@@ -80,7 +90,23 @@ func (s *Service) FinalizeBlock(
 	}
 
 	// STEP 4: Post Finalizations cleanups.
-	return valUpdates, s.PostFinalizeBlockOps(ctx, blk)
+	err = s.PostFinalizeBlockOps(ctx, blk)
+	if err != nil {
+		return valUpdates, err
+	}
+	
+	// Log complete FinalizeBlock timing
+	finalizeBlockDuration := time.Since(finalizeBlockStartTime)
+	s.logger.Info(
+		"[BENCHMARK] FinalizeBlock COMPLETE",
+		"slot", blk.GetSlot().Base10(),
+		"height", req.Height,
+		"total_duration_ms", finalizeBlockDuration.Milliseconds(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"timestamp_ms", time.Now().UnixMilli(),
+	)
+	
+	return valUpdates, nil
 }
 
 func (s *Service) FinalizeSidecars(
@@ -209,9 +235,33 @@ func (s *Service) executeStateTransition(
 		WithVerifyResult(false).
 		WithMeterGas(true)
 
-	return s.stateProcessor.Transition(
+	// Measure state transition time
+	transitionStart := time.Now()
+	beaconBlock := blk.GetBeaconBlock()
+	slot := beaconBlock.GetSlot()
+	
+	s.logger.Info(
+		"[BENCHMARK] State Transition START (FinalizeBlock)",
+		"slot", slot.Base10(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"timestamp_ms", transitionStart.UnixMilli(),
+	)
+	
+	valUpdates, err := s.stateProcessor.Transition(
 		txCtx,
 		st,
-		blk.GetBeaconBlock(),
+		beaconBlock,
 	)
+	
+	transitionDuration := time.Since(transitionStart)
+	s.logger.Info(
+		"[BENCHMARK] State Transition COMPLETE (FinalizeBlock)",
+		"slot", slot.Base10(),
+		"duration_ms", transitionDuration.Milliseconds(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"success", err == nil,
+		"timestamp_ms", time.Now().UnixMilli(),
+	)
+	
+	return valUpdates, err
 }

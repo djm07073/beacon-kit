@@ -62,6 +62,8 @@ func (s *Service) ProcessProposal(
 	req *cmtabci.ProcessProposalRequest,
 	thisNodeAddress []byte,
 ) (transition.ValidatorUpdates, error) {
+	// Log the start of ProcessProposal for full flow timing
+	processProposalStartTime := time.Now()
 	signedBlk, sidecars, err := s.ParseBeaconBlock(req)
 	if err != nil {
 		s.logger.Error("Failed to decode block and blobs", "error", err)
@@ -150,10 +152,11 @@ func (s *Service) ProcessProposal(
 	)
 
 	var valUpdates transition.ValidatorUpdates
-	valUpdates, err = s.VerifyIncomingBlock(
+	valUpdates, err = s.VerifyIncomingBlockWithTiming(
 		ctx,
 		consensusBlk,
 		bytes.Equal(thisNodeAddress, req.NextProposerAddress),
+		processProposalStartTime,
 	)
 	if err != nil {
 		s.logger.Error("failed to verify incoming block", "error", err)
@@ -209,12 +212,23 @@ func (s *Service) VerifyIncomingBlobSidecars(
 
 // VerifyIncomingBlock verifies the state root of an incoming block
 // and logs the process.
-//
-//nolint:funlen // abundantly commented
 func (s *Service) VerifyIncomingBlock(
 	ctx context.Context,
 	blk *types.ConsensusBlock,
 	isNextBlockProposer bool,
+) (transition.ValidatorUpdates, error) {
+	return s.VerifyIncomingBlockWithTiming(ctx, blk, isNextBlockProposer, time.Now())
+}
+
+// VerifyIncomingBlockWithTiming verifies the state root of an incoming block
+// with timing information for benchmarking.
+//
+//nolint:funlen // abundantly commented
+func (s *Service) VerifyIncomingBlockWithTiming(
+	ctx context.Context,
+	blk *types.ConsensusBlock,
+	isNextBlockProposer bool,
+	processProposalStartTime time.Time,
 ) (transition.ValidatorUpdates, error) {
 	beaconBlk := blk.GetBeaconBlock()
 	state := s.storageBackend.StateFromContext(ctx)
@@ -276,6 +290,17 @@ func (s *Service) VerifyIncomingBlock(
 			)
 		}
 	}
+	
+	// Log time before state transition starts
+	timeBeforeTransition := time.Since(processProposalStartTime)
+	s.logger.Info(
+		"[BENCHMARK] ProcessProposal -> State Transition START",
+		"slot", blkSlot.Base10(),
+		"time_before_transition_ms", timeBeforeTransition.Milliseconds(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"should_build_optimistic", shouldBuildNextBlock,
+		"timestamp_ms", time.Now().UnixMilli(),
+	)
 
 	// Verify the state root of the incoming block.
 	valUpdates, err := s.verifyStateRoot(ctx, state, blk)
@@ -300,6 +325,18 @@ func (s *Service) VerifyIncomingBlock(
 	s.logger.Info(
 		"State root verification succeeded - accepting incoming beacon block",
 		"state_root", beaconBlk.GetStateRoot(),
+	)
+	
+	// Log complete ProcessProposal timing
+	processProposalDuration := time.Since(processProposalStartTime)
+	s.logger.Info(
+		"[BENCHMARK] ProcessProposal FULL COMPLETE",
+		"slot", blkSlot.Base10(),
+		"total_duration_ms", processProposalDuration.Milliseconds(),
+		"time_to_state_transition_ms", time.Since(processProposalStartTime).Milliseconds(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"is_next_proposer", isNextBlockProposer,
+		"timestamp_ms", time.Now().UnixMilli(),
 	)
 
 	if shouldBuildNextBlock {
@@ -350,7 +387,32 @@ func (s *Service) verifyStateRoot(
 		WithVerifyResult(true).
 		WithMeterGas(isCacheActive)
 
-	valUpdates, err := s.stateProcessor.Transition(txCtx, st, blk.GetBeaconBlock())
+	// Measure state transition time
+	transitionStart := time.Now()
+	beaconBlock := blk.GetBeaconBlock()
+	slot := beaconBlock.GetSlot()
+	
+	s.logger.Info(
+		"[BENCHMARK] State Transition START (ProcessProposal)",
+		"slot", slot.Base10(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"is_cache_active", isCacheActive,
+		"timestamp_ms", transitionStart.UnixMilli(),
+	)
+	
+	valUpdates, err := s.stateProcessor.Transition(txCtx, st, beaconBlock)
+	
+	transitionDuration := time.Since(transitionStart)
+	s.logger.Info(
+		"[BENCHMARK] State Transition COMPLETE (ProcessProposal)",
+		"slot", slot.Base10(),
+		"duration_ms", transitionDuration.Milliseconds(),
+		"optimistic_enabled", s.optimisticPayloadBuilds,
+		"is_cache_active", isCacheActive,
+		"success", err == nil,
+		"timestamp_ms", time.Now().UnixMilli(),
+	)
+	
 	return valUpdates, err
 }
 
